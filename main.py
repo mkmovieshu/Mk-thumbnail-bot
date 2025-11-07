@@ -1,8 +1,9 @@
+# main.py (update: imports webserver from root-level file webserver.py)
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import os
 import threading
-from bot import webserver  # local webserver to keep process alive on some hosts
+import webserver  # changed: import root-level webserver.py
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -15,7 +16,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("/start - check bot\n/help - this help\n/mytemplates - list templates (demo)")
 
 async def mytemplates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # placeholder demo: in real app load user templates from DB or files
     await update.message.reply_text("📂 You have no templates yet. Use /newtemplate to create one (not implemented in demo).")
 
 def run_bot():
