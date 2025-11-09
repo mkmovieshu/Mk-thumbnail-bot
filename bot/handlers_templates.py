@@ -1,103 +1,55 @@
+import asyncio
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters,
-)
-from bot.db import ensure_user, create_template, get_templates_for_user
+import threading
+import os
 
-logger = logging.getLogger("templates")
+from flask import Flask
+from bot import db as bot_db
+from bot.handlers_templates import setup_template_handlers
+from telegram.ext import ApplicationBuilder, CommandHandler
 
-ASK_NAME, ASK_BUTTON_TEXT, ASK_BUTTON_URL, CONFIRM_ADD_MORE = range(4)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("main")
 
-# -------------------------------------------------------------------
-# Conversation flow
-# -------------------------------------------------------------------
-async def cmd_newtemplate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await ensure_user(update.effective_user)
-    await update.message.reply_text("Enter template name:")
-    return ASK_NAME
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN not found in environment variables")
 
-async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["template_name"] = update.message.text
-    context.user_data["buttons"] = []
-    await update.message.reply_text("Enter first button text:")
-    return ASK_BUTTON_TEXT
+app_flask = Flask(__name__)
 
-async def ask_button_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["button_text"] = update.message.text
-    await update.message.reply_text("Enter button URL:")
-    return ASK_BUTTON_URL
+@app_flask.route("/")
+def home():
+    return "✅ Thumbnail Bot is Live!"
 
-async def ask_button_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    text = context.user_data.get("button_text")
-    context.user_data["buttons"].append(
-        {"text": text, "url": url}
-    )
+async def run_bot():
+    """Runs Telegram bot polling loop."""
+    logger.info("Connecting to MongoDB...")
+    await bot_db.connect_with_retry()
+    logger.info("Connected to MongoDB (db=thumbnail_bot)")
 
-    keyboard = [
-        [
-            InlineKeyboardButton("➕ Add another", callback_data="add_more"),
-            InlineKeyboardButton("✅ Save template", callback_data="save_template"),
-        ]
-    ]
-    await update.message.reply_text(
-        "Do you want to add another button?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return CONFIRM_ADD_MORE
+    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-async def confirm_add_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    # Register command handlers
+    setup_template_handlers(bot_app)
 
-    if query.data == "add_more":
-        await query.edit_message_text("Enter next button text:")
-        return ASK_BUTTON_TEXT
+    # Delete webhook just in case
+    await bot_app.bot.delete_webhook(drop_pending_updates=True)
 
-    elif query.data == "save_template":
-        user = update.effective_user
-        name = context.user_data.get("template_name")
-        buttons = context.user_data.get("buttons", [])
-        await create_template(user.id, name, buttons)
-        await query.edit_message_text(f"✅ Template '{name}' saved successfully!")
-        return ConversationHandler.END
+    logger.info("🤖 Starting bot polling...")
+    await bot_app.run_polling(drop_pending_updates=True)
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Template creation cancelled.")
-    return ConversationHandler.END
+def start_flask():
+    """Starts Flask web server."""
+    app_flask.run(host="0.0.0.0", port=10000)
 
-# -------------------------------------------------------------------
-# Commands outside conversation
-# -------------------------------------------------------------------
-async def cmd_mytemplates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    templates = await get_templates_for_user(user.id)
-    if not templates:
-        await update.message.reply_text("You have no saved templates yet.")
-        return
-    text = "🧩 *Your Templates:*\n\n" + "\n".join(
-        [f"• {t['name']} ({len(t['buttons'])} buttons)" for t in templates]
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
+def main():
+    # Start Flask webserver in background thread
+    t = threading.Thread(target=start_flask, daemon=True)
+    t.start()
+    logger.info("✅ Webserver started in background")
 
-# -------------------------------------------------------------------
-# ConversationHandler setup
-# -------------------------------------------------------------------
-def get_conversation_handler():
-    return ConversationHandler(
-        entry_points=[CommandHandler("newtemplate", cmd_newtemplate)],
-        states={
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            ASK_BUTTON_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_button_text)],
-            ASK_BUTTON_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_button_url)],
-            CONFIRM_ADD_MORE: [CallbackQueryHandler(confirm_add_more)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,  # per_message removed
-    )
+    # Start bot (async)
+    asyncio.run(run_bot())
+
+if __name__ == "__main__":
+    main()
