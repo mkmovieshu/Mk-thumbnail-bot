@@ -35,62 +35,46 @@ def run_webserver():
     except Exception as e:
         logger.exception("Webserver crashed: %s", e)
 
+def polling_worker():
+    """
+    Runs in its own thread. Creates a fresh asyncio event loop via asyncio.run()
+    so PTB's async lifecycle is isolated from the main thread.
+    """
+    async def _worker():
+        # connect to mongo inside this loop
+        await bot_db.connect_with_retry()
+
+        # ensure webhook cleared
+        delete_webhook_if_any(BOT_TOKEN)
+        await asyncio.sleep(0.1)
+
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", start_cmd))
+        app.add_handler(handlers_templates.get_conversation_handler())
+        app.add_handler(CommandHandler("mytemplates", handlers_templates.cmd_mytemplates))
+
+        # optional debug handler (can remove later)
+        async def debug_all(update, context):
+            logger.info("DEBUG UPDATE: %s", json.dumps(update.to_dict(), default=str))
+        app.add_handler(MessageHandler(filters.ALL, debug_all), group=0)
+
+        logger.info("🔁 Polling worker: starting app.run_polling()")
+        # run polling (this will block inside asyncio.run until stopped)
+        await app.run_polling()
+
+    try:
+        asyncio.run(_worker())
+    except Exception:
+        logger.exception("Polling worker crashed")
+
 def main():
-    # 1) create and set event loop for main thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    # 2) connect to MongoDB (async) before starting bot
-    logger.info("Connecting to MongoDB...")
-    try:
-        loop.run_until_complete(bot_db.connect_with_retry())
-        logger.info("Connected to MongoDB (db=thumbnail_bot)")
-    except Exception:
-        logger.exception("Failed to connect to MongoDB")
-        raise
-
-    # 3) ensure webhook cleared
-    delete_webhook_if_any(BOT_TOKEN)
-
-    # 4) start Flask webserver in background thread (keeps Render happy)
-    t = threading.Thread(target=run_webserver, daemon=True)
+    # Start polling thread first (daemon)
+    t = threading.Thread(target=polling_worker, daemon=True)
     t.start()
-    logger.info("✅ Webserver started in background")
+    logger.info("✅ Polling thread started")
 
-    # 5) build application and register handlers
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(handlers_templates.get_conversation_handler())
-    app.add_handler(CommandHandler("mytemplates", handlers_templates.cmd_mytemplates))
-
-    # optional debug handler
-    async def debug_all(update, context):
-        logger.info("DEBUG UPDATE: %s", json.dumps(update.to_dict(), default=str))
-    app.add_handler(MessageHandler(filters.ALL, debug_all), group=0)
-
-    # 6) initialize and start app, then start polling (all using same loop)
-    try:
-        logger.info("🔁 Initializing and starting Telegram application...")
-        loop.run_until_complete(app.initialize())
-        loop.run_until_complete(app.start())
-
-        logger.info("🔁 Starting updater/polling...")
-        loop.run_until_complete(app.updater.start_polling())
-
-        # 7) keep process alive and let asyncio handle polling callbacks
-        logger.info("✅ Bot is now polling — entering loop.run_forever()")
-        loop.run_forever()
-
-    except Exception:
-        logger.exception("Polling crashed.")
-        # try graceful shutdown if possible
-        try:
-            loop.run_until_complete(app.shutdown())
-        except Exception:
-            logger.exception("Error during shutdown")
-        finally:
-            loop.stop()
-            raise
+    # Then run Flask webserver in main thread (blocking)
+    run_webserver()  # blocks and keeps the process alive for Render
 
 if __name__ == "__main__":
     main()
