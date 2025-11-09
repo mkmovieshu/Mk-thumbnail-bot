@@ -17,6 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable missing.")
 
+# simple start command handler
 async def start_cmd(update: Update, context):
     await update.message.reply_text("👋 Thumbnail Bot is active! Use /newtemplate to create one.")
 
@@ -30,6 +31,7 @@ def delete_webhook_if_any(token: str):
         logger.warning("Webhook deletion failed: %s", e)
 
 def run_webserver():
+    """Run Flask webserver (blocking) in main thread for Render health checks."""
     try:
         webserver.run()
     except Exception as e:
@@ -38,28 +40,29 @@ def run_webserver():
 def polling_worker():
     """
     Runs in its own thread. Creates a fresh asyncio event loop via asyncio.run()
-    so PTB's async lifecycle is isolated from the main thread.
+    so python-telegram-bot's async lifecycle is isolated from the main thread.
     """
     async def _worker():
-        # connect to mongo inside this loop
+        # connect to mongo (inside this event loop)
         await bot_db.connect_with_retry()
 
         # ensure webhook cleared
         delete_webhook_if_any(BOT_TOKEN)
         await asyncio.sleep(0.1)
 
+        # build PTB application and handlers
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", start_cmd))
         app.add_handler(handlers_templates.get_conversation_handler())
         app.add_handler(CommandHandler("mytemplates", handlers_templates.cmd_mytemplates))
 
-        # optional debug handler (can remove later)
+        # optional debug handler (remove in production)
         async def debug_all(update, context):
             logger.info("DEBUG UPDATE: %s", json.dumps(update.to_dict(), default=str))
         app.add_handler(MessageHandler(filters.ALL, debug_all), group=0)
 
         logger.info("🔁 Polling worker: starting app.run_polling()")
-        # run polling (this will block inside asyncio.run until stopped)
+        # this will block inside asyncio.run until stopped
         await app.run_polling()
 
     try:
@@ -68,13 +71,13 @@ def polling_worker():
         logger.exception("Polling worker crashed")
 
 def main():
-    # Start polling thread first (daemon)
+    # 1) Start polling thread (daemon)
     t = threading.Thread(target=polling_worker, daemon=True)
     t.start()
     logger.info("✅ Polling thread started")
 
-    # Then run Flask webserver in main thread (blocking)
-    run_webserver()  # blocks and keeps the process alive for Render
+    # 2) Run Flask webserver in main thread (blocking)
+    run_webserver()  # this keeps the process alive and exposes port for Render
 
 if __name__ == "__main__":
     main()
