@@ -74,7 +74,7 @@ async def main_async():
     app.add_handler(handlers_templates.get_conversation_handler())
     app.add_handler(CommandHandler("mytemplates", handlers_templates.cmd_mytemplates))
 
-    # Debug handler (helps verify incoming updates)
+    # (optional) debug handler — logs every incoming update
     from telegram.ext import MessageHandler, filters
     import json
     async def debug_all(update, context):
@@ -84,10 +84,7 @@ async def main_async():
     # Start polling
     logger.info("🔁 Starting bot polling loop...")
     try:
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        await app.updater.idle()  # Keeps running forever
+        await app.run_polling()  # This replaces all init/start/idle calls
     except Exception as e:
         logger.exception("Polling crashed: %s", e)
         raise
