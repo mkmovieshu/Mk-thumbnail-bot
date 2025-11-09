@@ -72,17 +72,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def get_conversation_handler():
     return ConversationHandler(
-        entry_points=[CommandHandler("newtemplate", cmd_newtemplate)],
-        states={
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            ASK_BUTTON_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_button_text)],
-            ASK_BUTTON_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_button_url)],
-            CONFIRM_ADD_MORE: [CallbackQueryHandler(confirm_add_more)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,
+    entry_points=[CommandHandler("newtemplate", cmd_newtemplate)],
+    states={ ... },
+    fallbacks=[CommandHandler("cancel", cancel)],
+    allow_reentry=True,
+    per_message=True 
     )
-
 
 async def cmd_mytemplates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
